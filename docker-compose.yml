@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: sport_project_db
+    environment:
+      - POSTGRES_DB=sport_db        # Nazwa Twojej bazy
+      - POSTGRES_USER=user      # Użytkownik
+      - POSTGRES_PASSWORD=pass # Hasło
+    ports:
+      - "5433:5432"                 # Udostępnienie portu na zewnątrz
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Zapisywanie danych na dysku (żeby nie zniknęły po restarcie)
+
+volumes:
+  postgres_data:
