@@ -20,7 +20,7 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-
+AUTH_USER_MODEL = 'SportApp.User'
 # Application definition
 
 INSTALLED_APPS = [
@@ -29,12 +29,12 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
+    'django_filters',
     'django.contrib.staticfiles',
     'SportApp.apps.SportappConfig',
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
-    'SportApp',
     'drf_spectacular',
 ]
 
@@ -53,8 +53,6 @@ ROOT_URLCONF = 'SportProject.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'templates']
-        ,
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -150,3 +148,6 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
 }
+
+API_FOOTBALL_KEY = os.getenv('API_KEY')
+API_FOOTBALL_HOST = 'v3.football.api-sports.io'
