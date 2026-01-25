@@ -1,5 +1,6 @@
 from rest_framework.permissions import BasePermission
 
+
 class IsAdminGroup(BasePermission):
     def has_permission(self, request, view):
         return bool(
@@ -15,3 +16,17 @@ class IsUserGroup(BasePermission):
             request.user.is_authenticated and
             request.user.groups.filter(name__in=['User', 'Admin']).exists()
         )
+
+class IsOwnerOrAdmin(BasePermission):
+    """
+    Pozwala właścicielowi (userowi) edytować/usuwać obiekt.
+    Admin może robić wszystko.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        # Admin może wszystko
+        if request.user.groups.filter(name='Admin').exists():
+            return True
+
+        # Właściciel może edytować/usuwać swoje
+        return obj.user == request.user

@@ -1,10 +1,63 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
+from SportProject import settings
+
 
 class User(AbstractUser):
     pass
 
+
+class UserAnalytics(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='analytics')
+
+    # --- 1. POLA TEKSTOWE (Etykiety) ---
+
+    # "Kim jestem psychologicznie?" (np. Analityk) - Z ankiety
+    base_psychology_type = models.CharField(max_length=50, blank=True, null=True)
+
+    # "Jaki jest mój bazowy styl piłkarski?" (np. Taktyk) - Wynika z psychologii
+    base_football_profile = models.CharField(max_length=50, blank=True, null=True)
+
+    # "Jaki jest mój AKTUALNY styl piłkarski?" (np. Agresor) - Wynika z dynamicznych preferencji
+    current_football_profile = models.CharField(max_length=50, blank=True, null=True)
+
+    # --- 2. WARTOŚCI LICZBOWE (Twoje istniejące pola) ---
+
+    # STAŁE (BASE)
+    base_defense = models.FloatField(default=50.0)
+    base_tactical = models.FloatField(default=50.0)
+    base_hype = models.FloatField(default=50.0)
+    base_aggression = models.FloatField(default=50.0)
+
+    # ZMIENNE (PREFERENCE)
+    preference_defense = models.FloatField(default=50.0)
+    preference_tactical = models.FloatField(default=50.0)
+    preference_hype = models.FloatField(default=50.0)
+    preference_aggression = models.FloatField(default=50.0)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.current_football_profile}"
+
+    def update_current_football_profile(self):
+        """
+        Sprawdza, który wskaźnik jest dominujący i nadaje etykietę piłkarską.
+        """
+        # TU JEST KLUCZOWA ZMIANA - TWOJE NAZWY
+        scores = {
+            'Defensor': self.preference_defense,  # Odpowiada Stabilizatorowi
+            'Strateg': self.preference_tactical,  # Odpowiada Analitykowi
+            'Kibic Adrenaliny': self.preference_hype,  # Odpowiada Poszukiwaczowi Doznań
+            'Agresor': self.preference_aggression  # Odpowiada Konfrontatorowi
+        }
+
+        # Znajduje klucz z największą wartością
+        # np. jeśli preference_tactical jest najwyższe, zwróci 'Strateg'
+        dominant_style = max(scores, key=scores.get)
+
+        self.current_football_profile = dominant_style
 
 class League(models.Model):
     api_id = models.IntegerField(unique=True)
@@ -179,3 +232,31 @@ class MatchRating(models.Model):
 
     class Meta:
         unique_together = ('user', 'match')
+
+
+class AnalyticsBenchmark(models.Model):
+    stat_name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Nazwa statystyki (np. corners, fouls)"
+    )
+
+    benchmark_value = models.FloatField(
+        default=0.0,  # <--- TO ROZWIĄZUJE PROBLEM PYTANIA W KONSOLI
+        help_text="Wartość limitu (Cap). Wszystko powyżej tej wartości będzie przycinane."
+    )
+
+    avg_value = models.FloatField(
+        default=0.0,  # <--- Tutaj też warto dać default
+        help_text="Rzeczywista średnia ligowa (informacyjnie)"
+    )
+
+    sample_size = models.IntegerField(
+        default=0,
+        help_text="Liczba meczów wzięta do analizy"
+    )
+
+    last_updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Stat: {self.stat_name} | Limit: {self.benchmark_value:.1f}"

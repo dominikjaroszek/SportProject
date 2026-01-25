@@ -14,7 +14,9 @@ class Command(BaseCommand):
         # Dzięki temu nie pobieramy w kółko tego samego.
         matches_to_update = Match.objects.filter(
             status="Finished",
-            home_total_shots__isnull=True
+            home_total_shots__isnull=True,
+            home_score__isnull = False,  # Ma wynik gospodarza
+            away_score__isnull = False
         ).order_by('-date')[:60]  # Od najnowszych
 
         #total_count = matches_to_update.count()
@@ -86,9 +88,9 @@ class Command(BaseCommand):
                         setattr(match, f'{prefix}passes_accurate', stat_value)
                     elif stat_type == 'Goalkeeper saves':
                         setattr(match, f'{prefix}goalkeeper_saves', stat_value)
-                    elif stat_type == 'Shots inside box':
+                    elif stat_type == 'Shots insidebox':
                         setattr(match, f'{prefix}shots_inside_box', stat_value)
-                    elif stat_type == 'Shots outside box':
+                    elif stat_type == 'Shots outsidebox':
                         setattr(match, f'{prefix}shots_outside_box', stat_value)
 
             match.save()
