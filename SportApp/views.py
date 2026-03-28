@@ -30,7 +30,7 @@ from .permissions import IsUserGroup, IsAdminGroup, IsOwnerOrAdmin
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.decorators import action
 from django.db.models import F, Q, Avg
-
+from .serializers import PersonalizedMatchSerializer # Używamy tego do polecanych spotkań
 
 class AdminCommandView(APIView):
     # Only allow Admins to access these endpoints
@@ -517,112 +517,123 @@ class MatchViewSet(viewsets.ModelViewSet):
         avg = match.avg_rating if match.avg_rating else 0.0
         return Response({"average_rating": round(avg, 2)})
 
+
 class StandingViewSet(viewsets.ModelViewSet):
-    queryset = Standing.objects.select_related('team', 'season', 'season__league').all().order_by('position')
+    # Select related optymalizuje zapytania do DB (eager loading)
+    queryset = Standing.objects.select_related('team', 'season', 'season__league').all()
     serializer_class = StandingSerializer
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_class = StandingFilter
+    ordering_fields = ['position', 'points']
+    ordering = ['position']  # Domyślne sortowanie
 
     def get_permissions(self):
-        # Dodajemy 'general' do listy publicznych endpointów
         if self.action in ['list', 'retrieve', 'home', 'away', 'general']:
             return [AllowAny()]
         return [IsAdminGroup()]
 
-    # --- METODA POMOCNICZA DO FILTROWANIA (Twoja) ---
-    def _apply_custom_filters(self, request, queryset):
+    def _get_annotated_queryset(self, prefix=''):
         """
-        Ręczne filtrowanie po lidze i sezonie
-        Obsługuje formaty: "2025", "2025-2026", "2025/2026", "2025 - 2026"
+        Metoda pomocnicza tworząca adnotacje SQL dla punktów i bramek.
+        Prefix: '' (ogólne), 'home_', 'away_'
         """
-        league_name = request.query_params.get('league')
-        season_str = request.query_params.get('season')
+        # Pobieramy queryset i aplikujemy filtry (league, season) automatycznie
+        queryset = self.filter_queryset(self.get_queryset())
 
-        if league_name:
-            queryset = queryset.filter(season__league__name__iexact=league_name)
+        # Tworzymy dynamiczne nazwy pól
+        p_win = f'{prefix}win' if prefix else 'win'
+        p_draw = f'{prefix}draw' if prefix else 'draw'
+        p_gf = f'{prefix}goals_for' if prefix else 'goals_for'
+        p_ga = f'{prefix}goals_against' if prefix else 'goals_against'
 
-        if season_str:
-            # Dekodowanie URL dzieje się automatycznie, więc mamy np. "2025/2026"
+        # Adnotacje SQL - obliczenia dzieją się w bazie danych
+        return queryset.annotate(
+            calculated_points=(F(p_win) * 3) + F(p_draw),
+            calculated_diff=F(p_gf) - F(p_ga)
+        ).order_by('-calculated_points', '-calculated_diff', f'-{p_gf}')
 
-            # 1. Sprawdzamy czy jest ukośnik (/)
-            if '/' in season_str:
-                year_val = season_str.split('/')[0].strip()
-            # 2. Sprawdzamy czy jest myślnik (-)
-            elif '-' in season_str:
-                year_val = season_str.split('-')[0].strip()
-            # 3. Jeśli nie ma znaków podziału, bierzemy całość
-            else:
-                year_val = season_str.strip()
-
-            queryset = queryset.filter(season__year=year_val)
-
-        return queryset
-
-    # --- 1. TABELA OGÓLNA (To jest ta przeniesiona funkcja) ---
+    # --- 1. TABELA OGÓLNA ---
     @extend_schema(
-        description="Pobiera ogólną tabelę ligową (parametry: league, season).",
+        description="Pobiera ogólną tabelę ligową.",
         parameters=[
             OpenApiParameter(name='league', description='Nazwa ligi', required=False, type=str),
-            OpenApiParameter(name='season', description='Sezon (np. 2024 - 2025)', required=False, type=str),
+            OpenApiParameter(name='season', description='Sezon (np. 2024/2026)', required=False, type=str),
         ],
         responses=StandingSerializer(many=True)
     )
     @action(detail=False, methods=['get'])
     def general(self, request):
-        queryset = self.get_queryset()
+        # Dla tabeli ogólnej często używamy pola 'position' zapisanego w bazie,
+        # ale jeśli chcesz liczyć dynamicznie, użyj _get_annotated_queryset('')
 
-        # Używamy tej samej logiki filtrowania co w home/away
-        queryset = self._apply_custom_filters(request, queryset)
+        # Wersja standardowa (sortowanie po pozycji z bazy):
+        queryset = self.filter_queryset(self.get_queryset()).order_by('position')
 
-        # Sortujemy standardowo po pozycji (lub punktach jeśli wolisz)
-        queryset = queryset.order_by('position')
+        # Jeśli pole 'points' w modelu nie istnieje, musisz je zaadnotować:
+        # queryset = queryset.annotate(points=(F('win')*3)+F('draw'), goals_diff=F('goals_for')-F('goals_against'))
 
-        serializer = StandingSerializer(queryset, many=True)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
     # --- 2. TABELA DOMOWA ---
     @extend_schema(
-        parameters=[
-            OpenApiParameter(name='league', description='Nazwa ligi', required=False, type=str),
-            OpenApiParameter(name='season', description='Sezon (np. 2024 - 2025)', required=False, type=str),
-        ],
         responses=HomeStandingSerializer(many=True)
     )
     @action(detail=False, methods=['get'])
     def home(self, request):
-        queryset = self.get_queryset()
-        queryset = self._apply_custom_filters(request, queryset)
+        # Używamy helpera do adnotacji i sortowania
+        queryset = self._get_annotated_queryset(prefix='home_')
 
-        home_queryset = queryset.annotate(
-            calc_points=(F('home_win') * 3) + F('home_draw'),
-            calc_diff=F('home_goals_for') - F('home_goals_against')
-        ).order_by('-calc_points', '-calc_diff', '-home_goals_for')
-
-        serializer = HomeStandingSerializer(home_queryset, many=True)
+        serializer = HomeStandingSerializer(queryset, many=True)
         return Response(serializer.data)
 
     # --- 3. TABELA WYJAZDOWA ---
     @extend_schema(
-        parameters=[
-            OpenApiParameter(name='league', description='Nazwa ligi', required=False, type=str),
-            OpenApiParameter(name='season', description='Sezon (np. 2024 - 2025)', required=False, type=str),
-        ],
         responses=AwayStandingSerializer(many=True)
     )
     @action(detail=False, methods=['get'])
     def away(self, request):
-        queryset = self.get_queryset()
-        queryset = self._apply_custom_filters(request, queryset)
+        queryset = self._get_annotated_queryset(prefix='away_')
 
-        away_queryset = queryset.annotate(
-            calc_points=(F('away_win') * 3) + F('away_draw'),
-            calc_diff=F('away_goals_for') - F('away_goals_against')
-        ).order_by('-calc_points', '-calc_diff', '-away_goals_for')
-
-        serializer = AwayStandingSerializer(away_queryset, many=True)
+        serializer = AwayStandingSerializer(queryset, many=True)
         return Response(serializer.data)
 
 
+class TopMatchesForUserStyleView(APIView):
+
+    def get(self, request):
+        user = request.user
+
+        # 1. Pobieramy obecne punkty użytkownika.
+        # (Zmień 'current_hype' na właściwe nazwy pól z Twojego modelu User/Profile)
+        user_stats = {
+            'analytics__hype_score': getattr(user, 'current_hype', getattr(user, 'base_hype', 0)),
+            'analytics__tactical_score': getattr(user, 'current_tactical', getattr(user, 'base_tactical', 0)),
+            'analytics__aggression_score': getattr(user, 'current_aggression', getattr(user, 'base_aggression', 0)),
+            'analytics__defense_score': getattr(user, 'current_defense', getattr(user, 'base_defense', 0)),
+        }
+
+        # 2. Znajdujemy kategorię (klucz), w której użytkownik ma najwięcej punktów
+        dominant_category = max(user_stats, key=user_stats.get)
+
+        # 3. Definiujemy po czym sortować w modelu MatchAnalytics (malejąco -> dodajemy "-")
+        order_by_field = f"-{dominant_category}"
+
+        # 4. Pobieramy 2 najwyżej ocenione mecze dla tej konkretnej kategorii
+        # Filtrujemy tylko mecze, które jeszcze się nie odbyły (date >= teraz)
+        top_matches = Match.objects.filter(
+            date__gte=timezone.now()  # Jeśli używasz statusów, możesz dać np. status='Not Started'
+        ).select_related('analytics').order_by(order_by_field)[:2]
+
+        # 5. Zwracamy zserializowane dane
+
+        serializer = PersonalizedMatchSerializer(top_matches, many=True)
+        return Response(serializer.data)
 # views.py
 
 class TopScorerViewSet(viewsets.ModelViewSet):

@@ -36,7 +36,7 @@ class Command(BaseCommand):
         service = FootballAPIService()
 
         # Konfiguracja
-        LEAGUES_TO_SYNC = [39]  # Premier League
+        LEAGUES_TO_SYNC = [311]  # Premier League
         TARGET_SEASON = 2025
 
         # Sprawdzenie co użytkownik chce zrobić
@@ -127,8 +127,10 @@ class Command(BaseCommand):
                 self.stdout.write("Tryb MATCHES: Aktualizacja wyników...")
                 fixtures = service.get_fixtures(league_id, TARGET_SEASON)
 
-                # Możliwa optymalizacja: Jeśli API pozwala pobrać tylko 'current round' lub 'last X days',
-                # warto zmienić metodę w service. Tutaj zakładamy pobranie całości (1 request).
+                # --- DEBUG 1: Sprawdzamy czy API w ogóle coś zwróciło ---
+                if not fixtures:
+                    self.stdout.write(
+                        self.style.ERROR("API zwróciło pustą listę meczów! Sprawdź klucz API lub rok sezonu."))
 
                 updated_count = 0
                 for item in fixtures:
@@ -145,6 +147,10 @@ class Command(BaseCommand):
                         home_team = Team.objects.get(api_id=teams['home']['id'])
                         away_team = Team.objects.get(api_id=teams['away']['id'])
                     except Team.DoesNotExist:
+                        # --- DEBUG 2: Sprawdzamy czy blokuje nas brak drużyny w bazie ---
+                        self.stdout.write(self.style.WARNING(
+                            f"Pomijam mecz {fixture['id']}: Brak drużyny w bazie! (Home ID: {teams['home']['id']}, Away ID: {teams['away']['id']})"
+                        ))
                         continue
 
                     readable_status = self.get_match_type_status(fixture['status']['short'])

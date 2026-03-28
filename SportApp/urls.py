@@ -24,7 +24,7 @@ from .views import (
     # Narzędzia
     GlobalSearchView, AdminCommandView, UserAnalyticsRadarView, RecommendedMatchesView
 )
-
+from .views import TopMatchesForUserStyleView
 # --- 1. KONFIGURACJA ROUTERA (Automatyczne endpointy CRUD) ---
 # Router tworzy ścieżki typu: /api/matches/, /api/matches/{id}/, /api/leagues/ itp.
 router = DefaultRouter()
@@ -37,9 +37,11 @@ router.register(r'standings', StandingViewSet)
 router.register(r'top_scorers', TopScorerViewSet)
 router.register(r'ratings', MatchRatingViewSet, basename='rating')
 
+
+
 # --- 2. LISTA URLI (Customowe + Auth + Router) ---
 urlpatterns = [
-
+path('matches/recommended-by-style/', TopMatchesForUserStyleView.as_view(), name='recommended-by-style'),
     path('matches/recommended/', RecommendedMatchesView.as_view(), name='recommended-matches'),
     path('auth/register/', RegisterView.as_view(), name='auth_register'),
     path('auth/login/', MyTokenObtainPairView.as_view(), name='auth_login'),

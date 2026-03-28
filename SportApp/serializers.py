@@ -9,6 +9,8 @@ from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
+from .profiling import initialize_user_analytics
+
 User = get_user_model()
 
 class UserSerializer(serializers.ModelSerializer):
@@ -151,9 +153,19 @@ class TeamDetailSerializer(serializers.ModelSerializer):
 
         ]
 
-class StandingSerializer(serializers.ModelSerializer):
+
+from rest_framework import serializers
+from .models import Standing
+
+
+class BaseStandingSerializer(serializers.ModelSerializer):
     team_name = serializers.CharField(source='team.name', read_only=True)
     team_logo = serializers.URLField(source='team.logo', read_only=True)
+
+    # Te pola zostaną wypełnione przez adnotacje w QuerySet (F expressions)
+    # Dzięki temu nie potrzebujemy wolnego SerializerMethodField
+    points = serializers.IntegerField(read_only=True)
+    goals_diff = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Standing
@@ -164,68 +176,37 @@ class StandingSerializer(serializers.ModelSerializer):
         ]
 
 
-class HomeStandingSerializer(serializers.ModelSerializer):
-    team_name = serializers.CharField(source='team.name', read_only=True)
-    team_logo = serializers.URLField(source='team.logo', read_only=True)
+# Serializery Home/Away mapują specyficzne pola (np. home_win) na ogólne nazwy (win)
+# aby frontend otrzymywał zawsze taką samą strukturę JSON.
 
+class HomeStandingSerializer(BaseStandingSerializer):
     played = serializers.IntegerField(source='home_played', read_only=True)
     win = serializers.IntegerField(source='home_win', read_only=True)
+
+    points = serializers.IntegerField(source='calculated_points', read_only=True)
+    goals_diff = serializers.IntegerField(source='calculated_diff', read_only=True)
+
     draw = serializers.IntegerField(source='home_draw', read_only=True)
     lose = serializers.IntegerField(source='home_lose', read_only=True)
     goals_for = serializers.IntegerField(source='home_goals_for', read_only=True)
     goals_against = serializers.IntegerField(source='home_goals_against', read_only=True)
 
-    points = serializers.SerializerMethodField()
-    goals_diff = serializers.SerializerMethodField()
 
-    class Meta:
-        model = Standing
-        fields = [
-            'team_name', 'team_logo', 'form',
-            'played', 'win', 'draw', 'lose',
-            'goals_for', 'goals_against', 'goals_diff', 'points'
-        ]
-
-    @extend_schema_field(int)
-    def get_points(self, obj):
-        # 3 pkt za wygraną, 1 za remis
-        return (obj.home_win * 3) + obj.home_draw
-
-    @extend_schema_field(int)
-    def get_goals_diff(self, obj):
-        return obj.home_goals_for - obj.home_goals_against
-
-
-class AwayStandingSerializer(serializers.ModelSerializer):
-    team_name = serializers.CharField(source='team.name', read_only=True)
-    team_logo = serializers.URLField(source='team.logo', read_only=True)
-
+class AwayStandingSerializer(BaseStandingSerializer):
     played = serializers.IntegerField(source='away_played', read_only=True)
     win = serializers.IntegerField(source='away_win', read_only=True)
+
+    points = serializers.IntegerField(source='calculated_points', read_only=True)
+    goals_diff = serializers.IntegerField(source='calculated_diff', read_only=True)
+
     draw = serializers.IntegerField(source='away_draw', read_only=True)
     lose = serializers.IntegerField(source='away_lose', read_only=True)
     goals_for = serializers.IntegerField(source='away_goals_for', read_only=True)
     goals_against = serializers.IntegerField(source='away_goals_against', read_only=True)
 
-    # OBLICZANE POLA
-    points = serializers.SerializerMethodField()
-    goals_diff = serializers.SerializerMethodField()
 
-    class Meta:
-        model = Standing
-        fields = [
-            'team_name', 'team_logo', 'form',
-            'played', 'win', 'draw', 'lose',
-            'goals_for', 'goals_against', 'goals_diff', 'points'
-        ]
-
-    @extend_schema_field(int)
-    def get_points(self, obj):
-        return (obj.away_win * 3) + obj.away_draw
-
-    @extend_schema_field(int)
-    def get_goals_diff(self, obj):
-        return obj.away_goals_for - obj.away_goals_against
+class StandingSerializer(BaseStandingSerializer):
+    pass
 
 
 class TopScorerSerializer(serializers.ModelSerializer):
@@ -432,10 +413,8 @@ class RegisterSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        # 1. Usuwamy pola, które NIE należą do modelu User
-        validated_data.pop('confirm_password')
-
-        # Musimy je usunąć ("pop"), żeby nie przeszkadzały przy tworzeniu Usera
+        # 1. Usuwamy pola dodatkowe (niezwiązane z modelem User)
+        validated_data.pop('confirm_password', None)
         validated_data.pop('personality_type', None)
         validated_data.pop('football_profile', None)
         validated_data.pop('base_hype', None)
@@ -443,20 +422,24 @@ class RegisterSerializer(serializers.ModelSerializer):
         validated_data.pop('base_aggression', None)
         validated_data.pop('base_defense', None)
 
-        email = validated_data['email']
-        username = validated_data.get('username', email)
+        # 2. Wyciągamy kluczowe pola dla create_user, usuwając je ze słownika
+        # Dzięki .pop() wyciągamy wartość i jednocześnie czyścimy validated_data
+        email = validated_data.pop('email')
+        password = validated_data.pop('password')
 
-        # 2. Tworzymy użytkownika (tylko z polami, które ma User)
+        # Pobieramy username lub używamy emaila, jeśli go nie ma
+        username = validated_data.pop('username', email)
+
+        # 3. Tworzymy użytkownika
+        # W validated_data zostały teraz tylko first_name i last_name (i ewentualnie inne pola modelu)
         user = User.objects.create_user(
             username=username,
             email=email,
-            password=validated_data['password'],
-            first_name=validated_data.get('first_name', ''),
-            last_name=validated_data.get('last_name', '')
-            # UWAGA: Usunąłem personality_type stąd, bo model User go nie ma!
-            # Te dane zostaną obsłużone w widoku (RegisterView).
+            password=password,
+            **validated_data  # Teraz nie ma tu już 'email' ani 'username', więc nie ma konfliktu
         )
 
+        # 4. Przypisanie do grupy
         try:
             user_group = Group.objects.get(name='User')
             user.groups.add(user_group)
