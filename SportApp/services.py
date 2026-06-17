@@ -16,10 +16,8 @@ class FootballAPIService:
         try:
             response = requests.get(url, headers=self.headers, params=params)
             response.raise_for_status()
-            # --- DODAJ TO NA CHWILĘ ---
             print(f"--- SUROWA ODPOWIEDŹ API (Status: {response.status_code}) ---")
             print(response.json())
-            # -------------------------
             time.sleep(7)
             return response.json().get('response', [])
         except requests.RequestException as e:

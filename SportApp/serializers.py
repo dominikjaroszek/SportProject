@@ -1,14 +1,12 @@
 from django.db.models import Avg
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
-from rest_framework.validators import UniqueTogetherValidator
 
-from .models import User, League, Season, Team, Match, Standing, TopScorer, MatchRating, UserAnalytics
+from .models import User,MatchAnalytics,  League, Season, Team, Match, Standing, TopScorer, MatchRating, UserAnalytics
 from django.contrib.auth.models import Group
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
-
 from .profiling import initialize_user_analytics
 
 User = get_user_model()
@@ -19,7 +17,6 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'first_name', 'last_name']
 
 class UserRadarChartSerializer(serializers.ModelSerializer):
-    # To pole nie jest w bazie, tworzymy je dynamicznie
     chart_data = serializers.SerializerMethodField()
     profile_info = serializers.SerializerMethodField()
 
@@ -28,23 +25,19 @@ class UserRadarChartSerializer(serializers.ModelSerializer):
         fields = ('chart_data', 'profile_info')
 
     def get_profile_info(self, obj):
-        """Zwraca nazwy profili do wyświetlenia nad wykresem"""
         return {
-            "base_name": obj.base_football_profile,      # np. "Strateg"
-            "current_name": obj.current_football_profile # np. "Agresor"
+            "base_name": obj.base_football_profile,
+            "current_name": obj.current_football_profile
         }
 
     def get_chart_data(self, obj):
-        """
-        Formatuje dane idealnie pod bibliotekę 'Recharts' lub 'Chart.js'.
-        Zwraca tablicę obiektów, gdzie każdy obiekt to jedna oś wykresu.
-        """
+
         return [
             {
-                "subject": "Hype",              # Nazwa osi
-                "base": obj.base_hype,          # Wartość startowa (np. z ankiety)
-                "current": obj.preference_hype, # Wartość aktualna (z ocen)
-                "fullMark": 100                 # Skala (max)
+                "subject": "Hype",
+                "base": obj.base_hype,
+                "current": obj.preference_hype,
+                "fullMark": 100
             },
             {
                 "subject": "Taktyka",
@@ -87,8 +80,6 @@ class SeasonDetailSerializer(serializers.ModelSerializer):
     league_name = serializers.CharField(source='league.name', read_only=True)
     logo = serializers.URLField(source='league.logo', read_only=True)
     country = serializers.CharField(source='league.country', read_only=True)
-
-    # Mapujemy 'year' z bazy na 'season_start_year' dla frontendu
     season_start_year = serializers.IntegerField(source='year', read_only=True)
     season_end_year = serializers.SerializerMethodField()
 
@@ -97,7 +88,6 @@ class SeasonDetailSerializer(serializers.ModelSerializer):
         fields = ['league_name', 'logo', 'country', 'season_start_year', 'season_end_year']
 
     def get_season_end_year(self, obj):
-        # Zakładamy, że sezon kończy się rok później (np. 2024 -> 2025)
         return obj.year + 1
 
 
@@ -162,8 +152,6 @@ class BaseStandingSerializer(serializers.ModelSerializer):
     team_name = serializers.CharField(source='team.name', read_only=True)
     team_logo = serializers.URLField(source='team.logo', read_only=True)
 
-    # Te pola zostaną wypełnione przez adnotacje w QuerySet (F expressions)
-    # Dzięki temu nie potrzebujemy wolnego SerializerMethodField
     points = serializers.IntegerField(read_only=True)
     goals_diff = serializers.IntegerField(read_only=True)
 
@@ -174,10 +162,6 @@ class BaseStandingSerializer(serializers.ModelSerializer):
             'played', 'win', 'draw', 'lose',
             'goals_for', 'goals_against', 'goals_diff', 'points'
         ]
-
-
-# Serializery Home/Away mapują specyficzne pola (np. home_win) na ogólne nazwy (win)
-# aby frontend otrzymywał zawsze taką samą strukturę JSON.
 
 class HomeStandingSerializer(BaseStandingSerializer):
     played = serializers.IntegerField(source='home_played', read_only=True)
@@ -220,7 +204,7 @@ class TopScorerSerializer(serializers.ModelSerializer):
 
 
 class MatchBaseSerializer(serializers.ModelSerializer):
-    match_id = serializers.IntegerField(source='api_id', read_only=True)  # Zmienione na api_id (bo tak masz w modelu)
+    match_id = serializers.IntegerField(source='api_id', read_only=True)
     match_date = serializers.DateTimeField(source='date', read_only=True)
 
     home_team = serializers.CharField(source='home_team.name', read_only=True)
@@ -228,11 +212,8 @@ class MatchBaseSerializer(serializers.ModelSerializer):
     home_team_logo = serializers.URLField(source='home_team.logo', read_only=True)
     away_team_logo = serializers.URLField(source='away_team.logo', read_only=True)
     league_name = serializers.CharField(source='season.league.name', read_only=True)
-
     season = serializers.SerializerMethodField()
     average_rating = serializers.SerializerMethodField()
-
-    # Status masz w modelu jako 'status', venue_name też jest w modelu Match
     venue_name = serializers.CharField(read_only=True)
 
     class Meta:
@@ -259,7 +240,6 @@ class MatchBaseSerializer(serializers.ModelSerializer):
         return round(avg, 2) if avg else 0.0
 
 
-# --- 2. LIST SERIALIZER ---
 class MatchListSerializer(MatchBaseSerializer):
     defense_score = serializers.FloatField(source='analytics.defense_score', read_only=True, allow_null=True)
     hype_score = serializers.FloatField(source='analytics.hype_score', read_only=True, allow_null=True)
@@ -272,15 +252,9 @@ class MatchListSerializer(MatchBaseSerializer):
         ]
 
 
-# --- 3. DETAIL SERIALIZER (NAPRAWIONY) ---
 class MatchDetailSerializer(MatchBaseSerializer):
-    # Pojemność bierzemy z modelu Team (bo w Match go nie ma)
     capacity = serializers.IntegerField(source='home_team.venue_capacity', read_only=True)
 
-    # --- MAPOWANIE PÓL (To naprawia błąd ImproperlyConfigured) ---
-    # Lewa strona = nazwa w JSON (frontend), Prawa strona (source) = nazwa w Twoim Modelu
-
-    # HOME TEAM
     home_team_shots_on_goal = serializers.IntegerField(source='home_shots_on_goal', read_only=True)
     home_team_shots_off_goal = serializers.IntegerField(source='home_shots_off_goal', read_only=True)
     home_team_total_shots = serializers.IntegerField(source='home_total_shots', read_only=True)
@@ -297,7 +271,6 @@ class MatchDetailSerializer(MatchBaseSerializer):
     home_team_total_passes = serializers.IntegerField(source='home_passes_total', read_only=True)
     home_team_passes_accuracy = serializers.IntegerField(source='home_passes_accurate', read_only=True)
 
-    # AWAY TEAM
     away_team_shots_on_goal = serializers.IntegerField(source='away_shots_on_goal', read_only=True)
     away_team_shots_off_goal = serializers.IntegerField(source='away_shots_off_goal', read_only=True)
     away_team_total_shots = serializers.IntegerField(source='away_total_shots', read_only=True)
@@ -332,7 +305,6 @@ class MatchDetailSerializer(MatchBaseSerializer):
         ]
 
 
-# --- 4. SCORE SERIALIZER ---
 class MatchScoreSerializer(MatchListSerializer):
     calculated_at = serializers.DateTimeField(source='analytics.calculated_at', read_only=True, allow_null=True)
 
@@ -340,36 +312,27 @@ class MatchScoreSerializer(MatchListSerializer):
         fields = MatchListSerializer.Meta.fields + ['calculated_at']
 
 
-# --- 5. RATING SERIALIZER ---
 class MatchRatingSerializer(serializers.ModelSerializer):
-    # 1. MATCH: Lookup po api_id
     match = serializers.SlugRelatedField(
         slug_field='api_id',
         queryset=Match.objects.all()
     )
 
-    # 2. USER: Jawnie ustawiamy jako read_only.
-    # Dzięki temu walidator nie krzyczy, że brakuje tego pola w request.data
     user = serializers.StringRelatedField(read_only=True)
     user_name = serializers.SerializerMethodField()
 
     class Meta:
         model = MatchRating
-        # Pamiętaj, aby dodać 'user_name' do pól, a usunąć stare 'username' jeśli tam było
-        fields = ['id', 'match', 'user', 'user_name', 'rating', 'created_at']  # ewentualnie 'comment'
+        fields = ['id', 'match', 'user', 'user_name', 'rating', 'created_at']
         read_only_fields = ['id', 'created_at', 'user']
 
-    # Ta metoda generuje zawartość pola 'user_name'
     def get_user_name(self, obj):
-        # Pobieramy imię i nazwisko
         full_name = f"{obj.user.first_name} {obj.user.last_name}".strip()
 
-        # Jeśli użytkownik ma wpisane imię i nazwisko, zwracamy je.
         if full_name:
             return full_name
 
-        # Jeśli nie ma imienia/nazwiska, zwracamy email lub username jako awaryjne rozwiązanie
-        return obj.user.username  # lub obj.user.email
+        return obj.user.username
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -378,9 +341,6 @@ class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
     confirm_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
 
-    # --- 1. DEFINIUJEMY POLA DODATKOWE (KTÓRYCH NIE MA W TABELI USER) ---
-    # write_only=True: Przyjmujemy dane, ale ich nie odsyłamy
-    # required=False: Żeby nie blokować rejestracji, jeśli frontend ich nie wyśle (obsłużymy to domyślnie)
     personality_type = serializers.CharField(write_only=True, required=False)
     football_profile = serializers.CharField(write_only=True, required=False)
 
@@ -391,7 +351,6 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        # Wymieniamy wszystkie pola, które chcemy przepuścić przez API
         fields = (
             'username', 'email', 'password', 'confirm_password',
             'first_name', 'last_name',
@@ -413,7 +372,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        # 1. Usuwamy pola dodatkowe (niezwiązane z modelem User)
         validated_data.pop('confirm_password', None)
         validated_data.pop('personality_type', None)
         validated_data.pop('football_profile', None)
@@ -422,24 +380,18 @@ class RegisterSerializer(serializers.ModelSerializer):
         validated_data.pop('base_aggression', None)
         validated_data.pop('base_defense', None)
 
-        # 2. Wyciągamy kluczowe pola dla create_user, usuwając je ze słownika
-        # Dzięki .pop() wyciągamy wartość i jednocześnie czyścimy validated_data
         email = validated_data.pop('email')
         password = validated_data.pop('password')
 
-        # Pobieramy username lub używamy emaila, jeśli go nie ma
         username = validated_data.pop('username', email)
 
-        # 3. Tworzymy użytkownika
-        # W validated_data zostały teraz tylko first_name i last_name (i ewentualnie inne pola modelu)
         user = User.objects.create_user(
             username=username,
             email=email,
             password=password,
-            **validated_data  # Teraz nie ma tu już 'email' ani 'username', więc nie ma konfliktu
+            **validated_data
         )
 
-        # 4. Przypisanie do grupy
         try:
             user_group = Group.objects.get(name='User')
             user.groups.add(user_group)
@@ -450,24 +402,19 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
-    # Wskazujemy, że polem wejściowym jest email, nie username
     username_field = User.EMAIL_FIELD
 
     def validate(self, attrs):
-        # Pobieramy email i hasło z requestu
         email = attrs.get('email')
         password = attrs.get('password')
 
         if email and password:
-            # Szukamy użytkownika po emailu
             user = User.objects.filter(email=email).first()
 
             if user and user.check_password(password):
-                # Jeśli użytkownik istnieje i hasło jest poprawne:
                 if not user.is_active:
                     raise serializers.ValidationError({"detail": "Konto jest nieaktywne."})
 
-                # Generujemy tokeny dla tego użytkownika
                 refresh = self.get_token(user)
 
                 data = {
@@ -485,16 +432,10 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def get_token(cls, user):
         token = super().get_token(user)
 
-        # Kodujemy dane wewnątrz Tokena (claims)
         token['firstName'] = user.first_name
         token['lastName'] = user.last_name
-
-        # --- ZMIANA 1: Dodajemy flagę is_superuser ---
         token['is_superuser'] = user.is_superuser
 
-        # --- ZMIANA 2: Logika roli ---
-        # Warto, aby superuser automatycznie miał też rolę 'admin',
-        # nawet jeśli zapomniałeś dodać go do grupy "Admin".
         if user.is_superuser or user.groups.filter(name='Admin').exists():
             token['role'] = 'admin'
         else:
@@ -529,7 +470,6 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 
 class TeamSimpleSerializer(serializers.ModelSerializer):
-    """Uproszczony serializer drużyny (używany w rekomendacjach)"""
 
     class Meta:
         model = Team
@@ -537,19 +477,10 @@ class TeamSimpleSerializer(serializers.ModelSerializer):
 
 
 class MatchAnalyticsSimpleSerializer(serializers.ModelSerializer):
-    """Uproszczony serializer statystyk (tylko główne wskaźniki)"""
 
     class Meta:
         model = Match
-        # Tutaj musisz uważać - w modelu Match nie masz tych pól bezpośrednio,
-        # ale w widoku rekomendacji odnosimy się do obiektu MatchAnalytics.
-        # Dlatego lepiej zrobić to tak:
-        fields = []  # Placeholder, w praktyce użyjemy zagnieżdżenia
-
-
-# Właściwy serializer dla modelu MatchAnalytics
-from .models import MatchAnalytics  # Upewnij się, że masz import
-
+        fields = []
 
 class AnalyticsScoreSerializer(serializers.ModelSerializer):
     class Meta:
@@ -558,13 +489,6 @@ class AnalyticsScoreSerializer(serializers.ModelSerializer):
 
 
 class PersonalizedMatchSerializer(serializers.ModelSerializer):
-    """
-    Serializer zwracający mecz wraz z wynikiem dopasowania (match_score).
-    ZMIANA: Pole 'id' zwraca teraz 'api_id'.
-    """
-    # --- TU JEST ZMIANA ---
-    # Nadpisujemy pole 'id'. Source='api_id' mówi Django:
-    # "Weź wartość z kolumny api_id, ale w JSON nazwij to po prostu id"
     id = serializers.IntegerField(source='api_id', read_only=True)
 
     home_team = TeamSimpleSerializer(read_only=True)
@@ -579,7 +503,7 @@ class PersonalizedMatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Match
         fields = [
-            'id',  # To pole teraz zawiera api_id
+            'id',  
             'date',
             'home_team',
             'away_team',

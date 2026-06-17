@@ -20,9 +20,7 @@ class StandingFilter(django_filters.FilterSet):
         fields = ['league', 'season']
 
     def filter_by_season(self, queryset, name, value):
-        """
-        Obsługuje formaty: "2025", "2025-2026", "2025/2026", "2025 - 2026"
-        """
+
         if not value:
             return queryset
 

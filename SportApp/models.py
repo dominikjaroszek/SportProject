@@ -30,19 +30,14 @@ class UserAnalytics(models.Model):
         return f"{self.user.username} - {self.current_football_profile}"
 
     def update_current_football_profile(self):
-        """
-        Sprawdza, który wskaźnik jest dominujący i nadaje etykietę piłkarską.
-        """
-        # TU JEST KLUCZOWA ZMIANA - TWOJE NAZWY
+
         scores = {
-            'Defensor': self.preference_defense,  # Odpowiada Stabilizatorowi
-            'Strateg': self.preference_tactical,  # Odpowiada Analitykowi
-            'Kibic Adrenaliny': self.preference_hype,  # Odpowiada Poszukiwaczowi Doznań
-            'Agresor': self.preference_aggression  # Odpowiada Konfrontatorowi
+            'Defensor': self.preference_defense,
+            'Strateg': self.preference_tactical,
+            'Kibic Adrenaliny': self.preference_hype,
+            'Agresor': self.preference_aggression
         }
 
-        # Znajduje klucz z największą wartością
-        # np. jeśli preference_tactical jest najwyższe, zwróci 'Strateg'
         dominant_style = max(scores, key=scores.get)
 
         self.current_football_profile = dominant_style
@@ -138,7 +133,7 @@ class Match(models.Model):
 
     class Meta:
         verbose_name_plural = "Matches"
-        ordering = ['date']  # Domyślne sortowanie po dacie
+        ordering = ['date']
 
     def __str__(self):
         return f"{self.home_team} vs {self.away_team}"

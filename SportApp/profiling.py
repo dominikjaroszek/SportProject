@@ -1,9 +1,6 @@
-# SportApp/profiling.py
 from .models import UserAnalytics, MatchRating
 
-
 def initialize_user_analytics(user, hype, tactical, aggression, defense, psych_type, football_profile):
-    # ... (bez zmian) ...
     UserAnalytics.objects.create(
         user=user,
         base_psychology_type=psych_type,
@@ -34,18 +31,15 @@ def recalculate_user_preferences(user):
     curr_defense = analytics.base_defense
 
     LIMIT = 50
-    # Tutaj używamy related_name 'analytics' z modelu MatchAnalytics, więc w select_related też
     recent_ratings = MatchRating.objects.filter(user=user) \
                          .select_related('match__analytics') \
                          .order_by('-created_at')[:LIMIT]
 
     for rating_obj in reversed(recent_ratings):
-        # --- POPRAWKA TUTAJ ---
-        # Było: .matchanalytics, Jest: .analytics (zgodnie z related_name)
         if not hasattr(rating_obj.match, 'analytics'):
             continue
 
-        match_stats = rating_obj.match.analytics  # <--- POPRAWKA
+        match_stats = rating_obj.match.analytics
         r = rating_obj.rating
 
         if r == 5:
@@ -96,13 +90,11 @@ def update_single_rating(user, rating_obj):
         initialize_user_analytics(user, 50, 50, 50, 50, "Nieznany", "Nieznany")
         analytics = user.analytics
 
-    # --- POPRAWKA TUTAJ ---
-    # Używamy .analytics zamiast .matchanalytics
     if not hasattr(rating_obj.match, 'analytics'):
         print(f"[PROFILING] BŁĄD: Mecz {rating_obj.match} nie ma atrybutu .analytics")
         return
 
-    match_stats = rating_obj.match.analytics  # <--- POPRAWKA
+    match_stats = rating_obj.match.analytics
     print(f"[PROFILING] Statystyki meczu pobrane. Hype: {match_stats.hype_score}")
 
     r = rating_obj.rating
@@ -131,7 +123,6 @@ def update_single_rating(user, rating_obj):
         m_aggression = 100 - m_aggression
         m_defense = 100 - m_defense
 
-    # Obliczenia...
     analytics.preference_hype = (analytics.preference_hype * (1 - ALPHA)) + (m_hype * ALPHA)
     analytics.preference_tactical = (analytics.preference_tactical * (1 - ALPHA)) + (m_tactical * ALPHA)
     analytics.preference_aggression = (analytics.preference_aggression * (1 - ALPHA)) + (m_aggression * ALPHA)

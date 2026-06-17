@@ -7,7 +7,6 @@ from SportApp.models import Match
 from SportApp.services import FootballAPIService
 from django.utils import timezone
 
-# Konfiguracja logowania do pliku
 LOG_FILE_PATH = os.path.join(settings.BASE_DIR, 'match_updates.log')
 logging.basicConfig(
     filename=LOG_FILE_PATH,
@@ -55,7 +54,6 @@ class Command(BaseCommand):
                     time.sleep(1)
                     continue
 
-                # Przetwarzanie statystyk (Logika setattr pozostaje bez zmian)
                 for item in stats_data:
                     team_id = item['team']['id']
                     stats_list = item['statistics']
@@ -65,7 +63,6 @@ class Command(BaseCommand):
                         stat_type = stat['type']
                         stat_value = 0 if stat['value'] is None else stat['value']
 
-                        # Mapowanie (skrócone w przykładzie dla czytelności)
                         mapping = {
                             'Shots on Goal': 'shots_on_goal',
                             'Shots off Goal': 'shots_off_goal',

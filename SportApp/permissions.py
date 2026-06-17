@@ -18,10 +18,6 @@ class IsUserGroup(BasePermission):
         )
 
 class IsOwnerOrAdmin(BasePermission):
-    """
-    Pozwala właścicielowi (userowi) edytować/usuwać obiekt.
-    Admin może robić wszystko.
-    """
 
     def has_object_permission(self, request, view, obj):
         # Admin może wszystko

@@ -30,43 +30,28 @@ from .permissions import IsUserGroup, IsAdminGroup, IsOwnerOrAdmin
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.decorators import action
 from django.db.models import F, Q, Avg
-from .serializers import PersonalizedMatchSerializer # Używamy tego do polecanych spotkań
+
 
 class AdminCommandView(APIView):
-    # Only allow Admins to access these endpoints
     permission_classes = [permissions.IsAdminUser]
 
     def post(self, request, command_name):
-        """
-        Executes Django Management Commands via API.
-        Expected command_name in URL:
-        'calculate_analytics', 'sync_full_season', 'fetch_match_statistics',
-        'calculate_benchmarks', 'calculate_history_analytics'
-        """
-
-        # Buffer to capture the command output
         out = StringIO()
 
         try:
             if command_name == 'calculate_analytics':
-                # Runs: python manage.py calculate_analytics
                 call_command('calculate_analytics', stdout=out)
 
             elif command_name == 'calculate_benchmarks':
-                # Runs: python manage.py calculate_benchmarks
                 call_command('calculate_benchmarks', stdout=out)
 
-            # --- NOWE: OBSŁUGA HISTORII (BACKFILL) ---
             elif command_name == 'calculate_history_analytics':
-                # Runs: python manage.py calculate_history_analytics
                 call_command('calculate_history_analytics', stdout=out)
 
             elif command_name == 'fetch_match_statistics':
-                # Runs: python manage.py fetch_match_statistics
                 call_command('fetch_match_statistics', stdout=out)
 
             elif command_name == 'sync_full_season':
-                # Runs: python manage.py sync_full_season --arg
                 options = request.data
                 args = []
                 if options.get('all'):
@@ -92,6 +77,8 @@ class AdminCommandView(APIView):
 
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
@@ -121,11 +108,7 @@ class LeagueViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=['get'])
     def names(self, request):
-        # ZMIANA TUTAJ:
-        # Używamy .values('name', 'logo'), żeby pobrać oba pola
         leagues = League.objects.values('name', 'logo').order_by('name')
-
-        # values() zwraca QuerySet słowników: [{'name': 'Bundesliga', 'logo': 'url...'}, ...]
         return Response(list(leagues))
 
     @extend_schema(
@@ -141,24 +124,18 @@ class LeagueViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         description="Zwraca szczegóły konkretnego sezonu dla danej ligi.",
-        responses=SeasonDetailSerializer  # Pamiętaj o imporcie SeasonDetailSerializer
+        responses=SeasonDetailSerializer
     )
-    # ZMIANA TUTAJ: Zmieniamy regex z [^/]+ na [\d-]+
-    # \d oznacza cyfry, - oznacza myślnik. To wyklucza słowa takie jak "seasons".
     @action(detail=True, methods=['get'], url_path=r'(?P<year>[\d-]+)')
     def season_details(self, request, name=None, year=None):
         league = self.get_object()
 
-        # 1. Obsługa formatu roku: "2024-2025" -> "2024"
         if '-' in str(year):
             year_val = str(year).split('-')[0]
         else:
             year_val = year
 
-        # 2. Pobranie sezonu
         season = get_object_or_404(Season, league=league, year=year_val)
-
-        # 3. Użycie nowego serializera
         serializer = SeasonDetailSerializer(season)
         return Response(serializer.data)
 
@@ -176,20 +153,16 @@ class SeasonViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         description="Zwraca tylko rok aktualnego sezonu jako liczbę (np. 2025).",
-        responses={200: int}  # Dokumentacja, że zwracamy int
+        responses={200: int}
     )
     @action(detail=False, methods=['get'], url_path='current-year')
     def current_year(self, request):
-        # 1. Próbujemy znaleźć sezon oznaczony jako is_current=True
-        # Bierzemy pierwszy z brzegu (najnowszy), jeśli jest ich kilka w różnych ligach
         current_season = Season.objects.filter(is_current=True).order_by('-year').first()
 
-        # 2. Jeśli nie ma ustawionego is_current, bierzemy po prostu najnowszy rok z bazy
         if not current_season:
             current_season = Season.objects.order_by('-year').first()
 
         if current_season:
-            # Zwracamy samą liczbę (int)
             return Response(current_season.year)
 
         return Response(None, status=404)
@@ -248,7 +221,6 @@ class TeamViewSet(viewsets.ReadOnlyModelViewSet):
             status='Finished'
         ).select_related('home_team', 'away_team').order_by('-date')
 
-        # Jeśli limit został podany w URL, używamy go do przycięcia listy
         if limit:
             matches = matches[:int(limit)]
 
@@ -276,24 +248,18 @@ class MatchRatingViewSet(viewsets.ModelViewSet):
     queryset = MatchRating.objects.all().order_by('-created_at')
     serializer_class = MatchRatingSerializer
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['match__api_id', 'user']  # Pamiętaj o match__api_id
+    filterset_fields = ['match__api_id', 'user']
 
     def get_permissions(self):
-        # 1. POPRAWKA BEZPIECZEŃSTWA:
-        # 'create' i 'my_rating' NIE MOGĄ być AllowAny.
-        # Anonimowy użytkownik nie ma "request.user", więc perform_create wyrzuci błąd 500.
         if self.action in ['list', 'retrieve']:
             return [AllowAny()]
 
-        # Do tworzenia i edycji musi być zalogowany (IsUserGroup lub IsAuthenticated)
         return [IsUserGroup()]
 
     def perform_create(self, serializer):
         try:
-            # Próbujemy zapisać z użytkownikiem
             serializer.save(user=self.request.user)
         except IntegrityError:
-            # Jeśli baza zgłosi duplikat, zwracamy ładny błąd API
             raise ValidationError({
                 "detail": "Oceniłeś już ten mecz. Użyj edycji, aby zmienić ocenę."
             })
@@ -309,9 +275,6 @@ class MatchRatingViewSet(viewsets.ModelViewSet):
         if not match_id:
             return Response({"error": "Brak parametru ?match_id="}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. POPRAWKA LOGICZNA (Lookup):
-        # Musisz szukać po match__api_id, a nie match_id (klucz obcy).
-        # match_id w bazie to ID wewnętrzne (np. 1), a Ty dostajesz 1379118.
         rating = get_object_or_404(MatchRating, user=request.user, match__api_id=match_id)
 
         if request.method == 'GET':
@@ -326,8 +289,9 @@ class MatchRatingViewSet(viewsets.ModelViewSet):
         elif request.method == 'DELETE':
             rating.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class MatchViewSet(viewsets.ModelViewSet):
-    # 1. Queryset z optymalizacją (pobieranie relacji + obliczanie średniej ocen)
     queryset = Match.objects.select_related(
         'home_team', 'away_team', 'season', 'season__league'
     ).annotate(
@@ -350,7 +314,6 @@ class MatchViewSet(viewsets.ModelViewSet):
     ordering = ['-date']
 
     def get_permissions(self):
-        # Akcje publiczne (dostępne dla każdego, także niezalogowanych)
         user_actions = [
             'list', 'retrieve', 'get_average',
             'list_finished', 'list_finished_round',
@@ -361,30 +324,18 @@ class MatchViewSet(viewsets.ModelViewSet):
         if self.action in user_actions:
             return [AllowAny()]
 
-        # Wszystkie inne akcje (create, update, delete) -> Tylko Admin
         return [IsAdminGroup()]
-
-    # --- 1. ENDPOINTY GRUPOWANE DLA STRONY GŁÓWNEJ (HOME) ---
 
     @extend_schema(
         description="Pobiera zakończone mecze ze wszystkich lig dla ich aktualnych sezonów, pogrupowane ligami. Idealne dla Home Page.",
         responses={200: MatchListSerializer(many=True)}
     )
     def list_finished_round(self, request):
-        """
-        Zwraca strukturę:
-        [
-            { "league_name": "Premier League", "matches": [...] },
-            { "league_name": "La Liga", "matches": [...] }
-        ]
-        """
-        # Pobieramy zakończone mecze tylko z AKTUALNYCH (is_current=True) sezonów
         matches = self.queryset.filter(
             status='Finished',
             season__is_current=True
         ).order_by('-date')
 
-        # Grupowanie po nazwie ligi
         grouped_data = {}
         for match in matches:
             league_name = match.season.league.name
@@ -392,7 +343,6 @@ class MatchViewSet(viewsets.ModelViewSet):
                 grouped_data[league_name] = []
             grouped_data[league_name].append(match)
 
-        # Tworzenie listy wynikowej
         result = []
         for league_name, match_list in grouped_data.items():
             result.append({
@@ -407,20 +357,11 @@ class MatchViewSet(viewsets.ModelViewSet):
         responses={200: MatchListSerializer(many=True)}
     )
     def list_upcoming_round(self, request):
-        """
-        Zwraca strukturę:
-        [
-            { "league_name": "Premier League", "matches": [...] },
-            ...
-        ]
-        """
-        # Pobieramy nadchodzące mecze tylko z AKTUALNYCH sezonów
         matches = self.queryset.filter(
             status='Scheduled',
             season__is_current=True
         ).order_by('date')
 
-        # Grupowanie po nazwie ligi
         grouped_data = {}
         for match in matches:
             league_name = match.season.league.name
@@ -428,7 +369,6 @@ class MatchViewSet(viewsets.ModelViewSet):
                 grouped_data[league_name] = []
             grouped_data[league_name].append(match)
 
-        # Tworzenie listy wynikowej
         result = []
         for league_name, match_list in grouped_data.items():
             result.append({
@@ -438,14 +378,7 @@ class MatchViewSet(viewsets.ModelViewSet):
 
         return Response(result)
 
-    # --- 2. ENDPOINTY SPECJALNE (Manual Routing w urls.py) ---
-    # Te metody są prawdopodobnie podpięte "na sztywno" w urls.py pod konkretne ścieżki z parametrami
-
     def list_finished(self, request, league_name, season_name, limit):
-        """
-        Pobiera X ostatnich zakończonych meczów dla konkretnej ligi i sezonu.
-        Używane np. w widoku szczegółów ligi.
-        """
         matches = self.queryset.filter(
             status='Finished',
             season__league__name__iexact=league_name.replace('-', ' '),
@@ -454,10 +387,6 @@ class MatchViewSet(viewsets.ModelViewSet):
         return Response(MatchListSerializer(matches, many=True).data)
 
     def list_upcoming(self, request, league_name, season_name, limit):
-        """
-        Pobiera X nadchodzących meczów dla konkretnej ligi i sezonu.
-        Używane np. w widoku szczegółów ligi.
-        """
         matches = self.queryset.filter(
             status='Scheduled',
             season__league__name__iexact=league_name.replace('-', ' '),
@@ -466,24 +395,11 @@ class MatchViewSet(viewsets.ModelViewSet):
         return Response(MatchBaseSerializer(matches, many=True).data)
 
     def list_upcoming_scores(self, request):
-        """
-        Zwraca strukturę:
-        [
-            {
-              "league_name": "Premier League",
-              "matches": [ {..., "hype_score": 8.5, "defense_score": 4.2}, ... ]
-            },
-            ...
-        ]
-        """
-        # 1. Pobieramy nadchodzące mecze z AKTUALNYCH sezonów
-        # WAŻNE: Dodajemy .select_related('analytics'), aby pobrać wskaźniki w jednym zapytaniu SQL
         matches = self.queryset.filter(
             status='Scheduled',
             season__is_current=True
         ).select_related('analytics').order_by('date')
 
-        # 2. Grupujemy mecze po nazwie ligi (tak samo jak w list_upcoming_round)
         grouped_data = {}
         for match in matches:
             league_name = match.season.league.name
@@ -493,7 +409,6 @@ class MatchViewSet(viewsets.ModelViewSet):
 
             grouped_data[league_name].append(match)
 
-        # 3. Budujemy odpowiedź JSON używając MatchScoreSerializer (który zawiera wskaźniki)
         result = []
         for league_name, match_list in grouped_data.items():
             result.append({
@@ -503,29 +418,24 @@ class MatchViewSet(viewsets.ModelViewSet):
 
         return Response(result)
 
-    # --- 3. STANDARDOWE AKCJE (Decorator @action) ---
-
     @extend_schema(
         description="Pobierz tylko średnią ocenę dla danego meczu",
         responses={200: {"type": "object", "properties": {"average_rating": {"type": "number"}}}}
     )
     @action(detail=True, methods=['get'], url_path='average-rating')
-    # ZMIANA: Zamiast (self, request, pk=None) wpisz (self, request, api_id=None)
-    # Musi się nazywać tak samo jak lookup_field!
     def get_average(self, request, api_id=None):
-        match = self.get_object()  # To zadziała poprawnie dzięki lookup_field
+        match = self.get_object()
         avg = match.avg_rating if match.avg_rating else 0.0
         return Response({"average_rating": round(avg, 2)})
 
 
 class StandingViewSet(viewsets.ModelViewSet):
-    # Select related optymalizuje zapytania do DB (eager loading)
     queryset = Standing.objects.select_related('team', 'season', 'season__league').all()
     serializer_class = StandingSerializer
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_class = StandingFilter
     ordering_fields = ['position', 'points']
-    ordering = ['position']  # Domyślne sortowanie
+    ordering = ['position']
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve', 'home', 'away', 'general']:
@@ -533,26 +443,18 @@ class StandingViewSet(viewsets.ModelViewSet):
         return [IsAdminGroup()]
 
     def _get_annotated_queryset(self, prefix=''):
-        """
-        Metoda pomocnicza tworząca adnotacje SQL dla punktów i bramek.
-        Prefix: '' (ogólne), 'home_', 'away_'
-        """
-        # Pobieramy queryset i aplikujemy filtry (league, season) automatycznie
         queryset = self.filter_queryset(self.get_queryset())
 
-        # Tworzymy dynamiczne nazwy pól
         p_win = f'{prefix}win' if prefix else 'win'
         p_draw = f'{prefix}draw' if prefix else 'draw'
         p_gf = f'{prefix}goals_for' if prefix else 'goals_for'
         p_ga = f'{prefix}goals_against' if prefix else 'goals_against'
 
-        # Adnotacje SQL - obliczenia dzieją się w bazie danych
         return queryset.annotate(
             calculated_points=(F(p_win) * 3) + F(p_draw),
             calculated_diff=F(p_gf) - F(p_ga)
         ).order_by('-calculated_points', '-calculated_diff', f'-{p_gf}')
 
-    # --- 1. TABELA OGÓLNA ---
     @extend_schema(
         description="Pobiera ogólną tabelę ligową.",
         parameters=[
@@ -563,14 +465,7 @@ class StandingViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=['get'])
     def general(self, request):
-        # Dla tabeli ogólnej często używamy pola 'position' zapisanego w bazie,
-        # ale jeśli chcesz liczyć dynamicznie, użyj _get_annotated_queryset('')
-
-        # Wersja standardowa (sortowanie po pozycji z bazy):
         queryset = self.filter_queryset(self.get_queryset()).order_by('position')
-
-        # Jeśli pole 'points' w modelu nie istnieje, musisz je zaadnotować:
-        # queryset = queryset.annotate(points=(F('win')*3)+F('draw'), goals_diff=F('goals_for')-F('goals_against'))
 
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -580,19 +475,16 @@ class StandingViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
-    # --- 2. TABELA DOMOWA ---
     @extend_schema(
         responses=HomeStandingSerializer(many=True)
     )
     @action(detail=False, methods=['get'])
     def home(self, request):
-        # Używamy helpera do adnotacji i sortowania
         queryset = self._get_annotated_queryset(prefix='home_')
 
         serializer = HomeStandingSerializer(queryset, many=True)
         return Response(serializer.data)
 
-    # --- 3. TABELA WYJAZDOWA ---
     @extend_schema(
         responses=AwayStandingSerializer(many=True)
     )
@@ -610,13 +502,11 @@ class TopMatchesForUserStyleView(APIView):
     def get(self, request):
         user = request.user
 
-        # UPEWNIAMY SIĘ, ŻE UŻYTKOWNIK MA PROFIL ANALITYCZNY
         try:
             analytics = user.analytics
         except UserAnalytics.DoesNotExist:
             return Response({"error": "Brak profilu analitycznego."}, status=404)
 
-        # 1. Pobieramy statystyki z właściwego modelu (UserAnalytics), a nie User!
         user_stats = {
             'analytics__hype_score': analytics.preference_hype,
             'analytics__tactical_score': analytics.preference_tactical,
@@ -624,32 +514,24 @@ class TopMatchesForUserStyleView(APIView):
             'analytics__defense_score': analytics.preference_defense,
         }
 
-        # 2. Znajdujemy kategorię (klucz), w której użytkownik ma najwięcej punktów
         dominant_category = max(user_stats, key=user_stats.get)
 
-        # 3. Definiujemy po czym sortować w modelu MatchAnalytics (malejąco -> dodajemy "-")
         order_by_field = f"-{dominant_category}"
 
-        # 4. Pobieramy 2 najwyżej ocenione mecze dla tej konkretnej kategorii
         top_matches = Match.objects.filter(
-            status='Scheduled',        # Tylko zaplanowane
-            analytics__isnull=False    # Zabezpieczenie przed meczami bez przeliczonej analityki
+            status='Scheduled',
+            analytics__isnull=False
         ).select_related('analytics').order_by(order_by_field)[:2]
 
-        # 5. Tworzymy sztuczne pole match_score dla Serializera
-        # (jako wynik przypisujemy wartość tej statystyki, przez którą wygrał mecz)
-        # dominant_category to np. 'analytics__hype_score', więc po offsecie wyciągamy 'hype_score'
         stat_name = dominant_category.split('__')[1]
         for match in top_matches:
             match.match_score = getattr(match.analytics, stat_name, 0)
 
-        # 6. Zwracamy zserializowane dane
         serializer = PersonalizedMatchSerializer(top_matches, many=True)
         return Response(serializer.data)
-# views.py
+
 
 class TopScorerViewSet(viewsets.ModelViewSet):
-    # ZMIANA PONIŻEJ: Usunąłem 'player' z select_related
     queryset = TopScorer.objects.select_related(
         'team', 'season', 'season__league'
     ).all().order_by('-goals')
@@ -678,16 +560,12 @@ class TopScorerViewSet(viewsets.ModelViewSet):
         league_name = request.query_params.get('league')
         season_str = request.query_params.get('season')
 
-        # 1. Filtrowanie po lidze
         if league_name:
             queryset = queryset.filter(season__league__name__iexact=league_name)
 
-        # 2. Filtrowanie po sezonie (Obsługa "/" oraz "-")
         if season_str:
-            # Sprawdzamy czy jest ukośnik (np. 2025/2026)
             if '/' in season_str:
                 year_val = season_str.split('/')[0].strip()
-            # Sprawdzamy czy jest myślnik (np. 2025 - 2026)
             elif '-' in season_str:
                 year_val = season_str.split('-')[0].strip()
             else:
@@ -703,8 +581,6 @@ class UserAnalyticsRadarView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        # Pobierz analitykę zalogowanego użytkownika
-        # Używamy related_name='analytics' z modelu User
         analytics = get_object_or_404(UserAnalytics, user=request.user)
 
         serializer = UserRadarChartSerializer(analytics)
@@ -728,34 +604,30 @@ class RegisterView(generics.CreateAPIView):
 
         user = serializer.save()
 
-        # --- POBIERANIE DANYCH Z FRONTENDU ---
-
-        # 1. Liczby (Statystyki)
         base_hype = request.data.get('base_hype', 50.0)
         base_tactical = request.data.get('base_tactical', 50.0)
         base_aggression = request.data.get('base_aggression', 50.0)
         base_defense = request.data.get('base_defense', 50.0)
 
-        # 2. Tekst (Nazwy profili) - TO JEST NOWE
-        # Frontend musi przysłać np. "Konfrontator" i "Agresor"
         psych_type = request.data.get('personality_type', 'Nieznany')
         football_profile = request.data.get('football_profile', 'Nieznany')
 
-        # 3. Inicjalizacja z kompletem danych
         initialize_user_analytics(
             user=user,
             hype=base_hype,
             tactical=base_tactical,
             aggression=base_aggression,
             defense=base_defense,
-            psych_type=psych_type,  # Przekazujemy nazwę psychologiczną
-            football_profile=football_profile  # Przekazujemy nazwę piłkarską
+            psych_type=psych_type,
+            football_profile=football_profile
         )
 
         return Response(
             {"message": "Rejestracja udana! Możesz się teraz zalogować."},
             status=status.HTTP_201_CREATED
         )
+
+
 class MyTokenObtainPairView(TokenObtainPairView):
     serializer_class = MyTokenObtainPairSerializer
 
@@ -790,6 +662,7 @@ class ChangePasswordView(generics.UpdateAPIView):
 
         return Response({"message": "Hasło zostało pomyślnie zmienione."}, status=status.HTTP_200_OK)
 
+
 class CurrentUserView(generics.RetrieveAPIView):
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -804,7 +677,6 @@ class RecommendedMatchesView(APIView):
     def get(self, request):
         user = request.user
 
-        # 1. Sprawdź czy użytkownik ma profil analityczny
         try:
             user_analytics = user.analytics
         except UserAnalytics.DoesNotExist:
@@ -813,32 +685,23 @@ class RecommendedMatchesView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # 2. Pobierz nadchodzące mecze, które mają wyliczone wskaźniki
-        # (Status 'Scheduled' i data w przyszłości)
         now = timezone.now()
         upcoming_matches = Match.objects.filter(
             status='Scheduled',
             date__gte=now,
-            analytics__isnull=False  # Tylko mecze, które mają analizę
+            analytics__isnull=False
         ).select_related('analytics', 'home_team', 'away_team')
 
         scored_matches = []
 
-        # Pobieramy preferencje użytkownika
         u_hype = user_analytics.preference_hype
         u_tactical = user_analytics.preference_tactical
         u_aggression = user_analytics.preference_aggression
         u_defense = user_analytics.preference_defense
 
-        # 3. Algorytm dopasowania (Nearest Neighbor)
         for match in upcoming_matches:
-            # Pobieramy statystyki meczu
-            # Pamiętaj, że w analytics.py normalizujesz wyniki do 100,
-            # więc UserAnalytics też jest w skali 0-100.
             m_analytics = match.analytics
 
-            # Obliczamy różnicę (Dystans Euklidesowy)
-            # Wzór: sqrt( (u1-m1)^2 + (u2-m2)^2 + ... )
             diff_hype = (u_hype - m_analytics.hype_score) ** 2
             diff_tactical = (u_tactical - m_analytics.tactical_score) ** 2
             diff_aggression = (u_aggression - m_analytics.aggression_score) ** 2
@@ -846,21 +709,14 @@ class RecommendedMatchesView(APIView):
 
             euclidean_distance = math.sqrt(diff_hype + diff_tactical + diff_aggression + diff_defense)
 
-            # Opcjonalnie: Zamiana dystansu na procentowe dopasowanie (dla frontendu)
-            # Maksymalny możliwy dystans przy 4 wymiarach (0-100) to sqrt(100^2 * 4) = 200
             match_fit_percentage = max(0, 100 - (euclidean_distance / 2))
 
-            # Dodajemy atrybut tymczasowy do obiektu, żeby serializer go złapał
             match.match_score = round(match_fit_percentage, 1)
 
-            # Zapisujemy krotkę (dystans, mecz)
             scored_matches.append((euclidean_distance, match))
 
-        # 4. Sortowanie i wybór
-        # Sortujemy rosnąco po dystansie (im mniejszy dystans, tym lepsze dopasowanie)
         scored_matches.sort(key=lambda x: x[0])
 
-        # Bierzemy 2 najlepsze mecze
         top_matches = [item[1] for item in scored_matches[:2]]
 
         serializer = PersonalizedMatchSerializer(top_matches, many=True)
