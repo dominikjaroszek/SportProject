@@ -605,17 +605,23 @@ class StandingViewSet(viewsets.ModelViewSet):
 
 
 class TopMatchesForUserStyleView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
 
-        # 1. Pobieramy obecne punkty użytkownika.
-        # (Zmień 'current_hype' na właściwe nazwy pól z Twojego modelu User/Profile)
+        # UPEWNIAMY SIĘ, ŻE UŻYTKOWNIK MA PROFIL ANALITYCZNY
+        try:
+            analytics = user.analytics
+        except UserAnalytics.DoesNotExist:
+            return Response({"error": "Brak profilu analitycznego."}, status=404)
+
+        # 1. Pobieramy statystyki z właściwego modelu (UserAnalytics), a nie User!
         user_stats = {
-            'analytics__hype_score': getattr(user, 'current_hype', getattr(user, 'base_hype', 0)),
-            'analytics__tactical_score': getattr(user, 'current_tactical', getattr(user, 'base_tactical', 0)),
-            'analytics__aggression_score': getattr(user, 'current_aggression', getattr(user, 'base_aggression', 0)),
-            'analytics__defense_score': getattr(user, 'current_defense', getattr(user, 'base_defense', 0)),
+            'analytics__hype_score': analytics.preference_hype,
+            'analytics__tactical_score': analytics.preference_tactical,
+            'analytics__aggression_score': analytics.preference_aggression,
+            'analytics__defense_score': analytics.preference_defense,
         }
 
         # 2. Znajdujemy kategorię (klucz), w której użytkownik ma najwięcej punktów
@@ -625,13 +631,19 @@ class TopMatchesForUserStyleView(APIView):
         order_by_field = f"-{dominant_category}"
 
         # 4. Pobieramy 2 najwyżej ocenione mecze dla tej konkretnej kategorii
-        # Filtrujemy tylko mecze, które jeszcze się nie odbyły (date >= teraz)
         top_matches = Match.objects.filter(
-            date__gte=timezone.now()  # Jeśli używasz statusów, możesz dać np. status='Not Started'
+            status='Scheduled',        # Tylko zaplanowane
+            analytics__isnull=False    # Zabezpieczenie przed meczami bez przeliczonej analityki
         ).select_related('analytics').order_by(order_by_field)[:2]
 
-        # 5. Zwracamy zserializowane dane
+        # 5. Tworzymy sztuczne pole match_score dla Serializera
+        # (jako wynik przypisujemy wartość tej statystyki, przez którą wygrał mecz)
+        # dominant_category to np. 'analytics__hype_score', więc po offsecie wyciągamy 'hype_score'
+        stat_name = dominant_category.split('__')[1]
+        for match in top_matches:
+            match.match_score = getattr(match.analytics, stat_name, 0)
 
+        # 6. Zwracamy zserializowane dane
         serializer = PersonalizedMatchSerializer(top_matches, many=True)
         return Response(serializer.data)
 # views.py
